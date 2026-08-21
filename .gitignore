@@ -1,0 +1,26 @@
+# Virtual environment
+.venv/
+env/
+venv/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Data files & checkpoints
+data/
+*.pkl
+*.npy
+*.mat
+*.h5
+*.pt
+*.pth
+*.ckpt
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
