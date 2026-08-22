@@ -24,3 +24,5 @@ data/
 .idea/
 .DS_Store
 Thumbs.db
+
+stft_dataset.npz
