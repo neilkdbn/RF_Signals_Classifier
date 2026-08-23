@@ -26,3 +26,4 @@ data/
 Thumbs.db
 
 stft_dataset.npz
+*.onnx
