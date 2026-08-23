@@ -114,7 +114,8 @@ class ResNet18_2D(nn.Module):
                 nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.Linear):
                 nn.init.normal_(m.weight, 0, 0.01)
-                nn.init.constant_(m.bias, 0)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
         """
@@ -146,44 +147,342 @@ class ResNet18_2D(nn.Module):
         return x
 
 
+# ══════════════════════════════════════════════════════════════
+# CHUNK 3: STFT-RADN (Residual Attention Dense Network)
+# ══════════════════════════════════════════════════════════════
+
+
+# ──────────────────────────────────────────────────────────────
+# CBAM: Convolutional Block Attention Module
+# (Woo et al., ECCV 2018)
+# ──────────────────────────────────────────────────────────────
+
+class ChannelAttention(nn.Module):
+    """
+    Channel Attention sub-module of CBAM.
+    Learns inter-channel feature dependencies via shared MLP
+    applied to both global average-pooled and max-pooled descriptors.
+    """
+
+    def __init__(self, channels, reduction=16):
+        super().__init__()
+        mid = max(channels // reduction, 8)
+        self.mlp = nn.Sequential(
+            nn.Linear(channels, mid, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(mid, channels, bias=False),
+        )
+
+    def forward(self, x):
+        # x: [B, C, H, W]
+        avg_pool = x.mean(dim=[2, 3])           # [B, C]
+        max_pool = x.amax(dim=[2, 3])           # [B, C]
+
+        scale = torch.sigmoid(self.mlp(avg_pool) + self.mlp(max_pool))  # [B, C]
+        return x * scale.unsqueeze(-1).unsqueeze(-1)
+
+
+class SpatialAttention(nn.Module):
+    """
+    Spatial Attention sub-module of CBAM.
+    Learns intra-spatial feature importance from channel-wise
+    average and max descriptors.
+    """
+
+    def __init__(self, kernel_size=7):
+        super().__init__()
+        self.conv = nn.Conv2d(
+            2, 1, kernel_size, padding=kernel_size // 2, bias=False
+        )
+
+    def forward(self, x):
+        # x: [B, C, H, W]
+        avg_pool = x.mean(dim=1, keepdim=True)  # [B, 1, H, W]
+        max_pool = x.amax(dim=1, keepdim=True)  # [B, 1, H, W]
+
+        scale = torch.sigmoid(
+            self.conv(torch.cat([avg_pool, max_pool], dim=1))
+        )  # [B, 1, H, W]
+        return x * scale
+
+
+class CBAM(nn.Module):
+    """
+    Full CBAM block: Channel Attention followed by Spatial Attention.
+
+    Args:
+        channels (int): Number of input feature channels.
+        reduction (int): Channel reduction ratio for the shared MLP.
+        spatial_kernel (int): Kernel size for the spatial attention conv.
+    """
+
+    def __init__(self, channels, reduction=16, spatial_kernel=7):
+        super().__init__()
+        self.channel_att = ChannelAttention(channels, reduction)
+        self.spatial_att = SpatialAttention(spatial_kernel)
+
+    def forward(self, x):
+        x = self.channel_att(x)
+        x = self.spatial_att(x)
+        return x
+
+
+# ──────────────────────────────────────────────────────────────
+# Residual Dense Block (RDB)
+# (Zhang et al., CVPR 2018 — adapted with CBAM)
+# ──────────────────────────────────────────────────────────────
+
+class DenseLayer(nn.Module):
+    """
+    Single dense layer: BN -> ReLU -> 3x3 Conv -> concatenate with input.
+    Each layer produces `growth_rate` new feature maps that are
+    concatenated onto the running feature tensor.
+    """
+
+    def __init__(self, in_channels, growth_rate):
+        super().__init__()
+        self.layer = nn.Sequential(
+            nn.BatchNorm2d(in_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels, growth_rate, 3, padding=1, bias=False),
+        )
+
+    def forward(self, x):
+        return torch.cat([x, self.layer(x)], dim=1)
+
+
+class ResidualDenseBlock(nn.Module):
+    """
+    Residual Dense Block with CBAM attention.
+
+    Internal structure:
+        Input (C ch) -> DenseLayer x num_layers -> Local Feature Fusion (1x1)
+        -> CBAM -> + Input  (local residual)
+
+    Dense connections ensure maximum feature reuse; CBAM refines
+    the fused features before the residual addition.
+
+    Args:
+        in_channels (int): Number of input channels (and output channels).
+        growth_rate (int): New feature maps produced per dense layer.
+        num_layers (int): Number of dense layers inside this block.
+    """
+
+    def __init__(self, in_channels=64, growth_rate=32, num_layers=4):
+        super().__init__()
+
+        # Build dense layers with growing channel counts
+        layers = []
+        ch = in_channels
+        for _ in range(num_layers):
+            layers.append(DenseLayer(ch, growth_rate))
+            ch += growth_rate
+        self.dense_layers = nn.Sequential(*layers)
+
+        # Local Feature Fusion: compress concatenated features back to in_channels
+        self.lff = nn.Sequential(
+            nn.Conv2d(ch, in_channels, 1, bias=False),
+            nn.BatchNorm2d(in_channels),
+        )
+
+        # Attention refinement
+        self.cbam = CBAM(in_channels)
+
+    def forward(self, x):
+        out = self.dense_layers(x)          # [B, C + L*G, H, W]
+        out = self.lff(out)                 # [B, C, H, W]
+        out = self.cbam(out)                # [B, C, H, W]  (attention-refined)
+        return out + x                      # Local residual learning
+
+
+# ──────────────────────────────────────────────────────────────
+# STFT-RADN: Full Architecture
+# ──────────────────────────────────────────────────────────────
+
+class STFTRADN(nn.Module):
+    """
+    STFT-based Residual Attention Dense Network.
+
+    Integrates CBAM attention and Residual Dense Blocks for rich
+    spectral feature extraction from 2D STFT spectrograms.
+
+    Architecture:
+        Shallow Feature Extraction (2-layer stem)
+          -> RDB+CBAM x num_rdb  (dense feature reuse + attention)
+          -> Global Feature Fusion  (1x1 conv on concatenated RDB outputs)
+          -> Global Residual  (+ shallow features)
+          -> Classification Backbone  (strided convs for spatial reduction)
+          -> FC
+
+    Expected input:  [B, in_channels, 64, 5]
+    Output:          [B, num_classes]
+
+    Args:
+        num_classes (int): Number of modulation classes. Default 11.
+        in_channels (int): Input channels. 1 (grayscale) or 3 (hybrid).
+        base_channels (int): Feature width through the RDB blocks.
+        growth_rate (int): New feature maps per dense layer.
+        num_dense_layers (int): Dense layers inside each RDB.
+        num_rdb (int): Number of RDB blocks.
+    """
+
+    def __init__(self, num_classes=11, in_channels=1,
+                 base_channels=64, growth_rate=32,
+                 num_dense_layers=4, num_rdb=3):
+        super().__init__()
+        self.num_rdb = num_rdb
+
+        # ── Shallow Feature Extraction (2-layer stem) ─────────
+        self.sfe1 = nn.Conv2d(
+            in_channels, base_channels, 3, padding=1, bias=False
+        )
+        self.sfe2 = nn.Sequential(
+            nn.BatchNorm2d(base_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(base_channels, base_channels, 3, padding=1, bias=False),
+        )
+
+        # ── Residual Dense Blocks with CBAM ───────────────────
+        self.rdbs = nn.ModuleList([
+            ResidualDenseBlock(base_channels, growth_rate, num_dense_layers)
+            for _ in range(num_rdb)
+        ])
+
+        # ── Global Feature Fusion ─────────────────────────────
+        self.gff = nn.Sequential(
+            nn.Conv2d(base_channels * num_rdb, base_channels, 1, bias=False),
+            nn.BatchNorm2d(base_channels),
+            nn.ReLU(inplace=True),
+        )
+
+        # ── Classification Backbone (downsample + deepen) ─────
+        self.backbone = nn.Sequential(
+            nn.Conv2d(base_channels, 128, 3, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(128, 256, 3, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d((1, 1)),
+        )
+
+        # ── Classification Head ───────────────────────────────
+        self.fc = nn.Linear(256, num_classes)
+
+        # ── Weight Initialization ─────────────────────────────
+        self._init_weights()
+
+    def _init_weights(self):
+        """Kaiming initialization for stable gradient flow."""
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, 0, 0.01)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        """
+        Forward pass through STFT-RADN.
+
+        Feature map sizes for input [B, 1, 64, 5]:
+            sfe1     -> [B, 64,  64, 5]   (shallow features F0)
+            sfe2     -> [B, 64,  64, 5]   (deeper stem F1)
+            RDB x3   -> [B, 64,  64, 5]   each (local residual preserved)
+            GFF      -> [B, 64,  64, 5]   (fused from 3 x 64 = 192 ch)
+            + F0     -> [B, 64,  64, 5]   (global residual)
+            backbone -> [B, 256,  1, 1]   (spatial reduction + pooling)
+            fc       -> [B, num_classes]
+        """
+        # Shallow Feature Extraction
+        f0 = self.sfe1(x)
+        f1 = self.sfe2(f0)
+
+        # Pass through RDB blocks, collecting each output
+        rdb_outputs = []
+        h = f1
+        for rdb in self.rdbs:
+            h = rdb(h)
+            rdb_outputs.append(h)
+
+        # Global Feature Fusion
+        gff_out = self.gff(torch.cat(rdb_outputs, dim=1))
+
+        # Global Residual Learning
+        out = gff_out + f0
+
+        # Classification
+        out = self.backbone(out)
+        out = torch.flatten(out, 1)
+        out = self.fc(out)
+
+        return out
+
+
 # =========================================================================
-# Smoke Test
+# Smoke Test (both architectures)
 # =========================================================================
 if __name__ == "__main__":
-    print("=" * 58)
-    print("   CHUNK 2: ResNet-18 2D ARCHITECTURE SMOKE TEST")
-    print("=" * 58)
 
-    # ── Test 1: Grayscale input [B, 1, 64, 5] ─────────────────
-    model_gray = ResNet18_2D(num_classes=11, in_channels=1)
-    x_gray = torch.randn(8, 1, 64, 5)
-    out_gray = model_gray(x_gray)
+    def count_params(model):
+        total = sum(p.numel() for p in model.parameters())
+        trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        return total, trainable
 
-    assert out_gray.shape == (8, 11), f"Expected (8, 11), got {out_gray.shape}"
-    print(f"[PASS] Grayscale  input {tuple(x_gray.shape)} -> output {tuple(out_gray.shape)}")
-
-    # ── Test 2: Hybrid input [B, 3, 64, 5] ────────────────────
-    model_hybrid = ResNet18_2D(num_classes=11, in_channels=3)
+    x_gray   = torch.randn(8, 1, 64, 5)
     x_hybrid = torch.randn(8, 3, 64, 5)
-    out_hybrid = model_hybrid(x_hybrid)
-
-    assert out_hybrid.shape == (8, 11), f"Expected (8, 11), got {out_hybrid.shape}"
-    print(f"[PASS] Hybrid     input {tuple(x_hybrid.shape)} -> output {tuple(out_hybrid.shape)}")
-
-    # ── Test 3: Custom class count (MATLAB dataset = 5 classes) ─
-    model_custom = ResNet18_2D(num_classes=5, in_channels=1)
     x_custom = torch.randn(4, 1, 64, 5)
-    out_custom = model_custom(x_custom)
 
-    assert out_custom.shape == (4, 5), f"Expected (4, 5), got {out_custom.shape}"
-    print(f"[PASS] Custom     input {tuple(x_custom.shape)} -> output {tuple(out_custom.shape)} (5 classes)")
+    # ── ResNet-18 Tests ────────────────────────────────────────
+    print("=" * 58)
+    print("   ResNet-18 2D SMOKE TEST")
+    print("=" * 58)
 
-    # ── Parameter Count ────────────────────────────────────────
-    total_params = sum(p.numel() for p in model_gray.parameters())
-    trainable = sum(p.numel() for p in model_gray.parameters() if p.requires_grad)
-    print(f"\n[INFO] Total parameters    : {total_params:,}")
-    print(f"[INFO] Trainable parameters: {trainable:,}")
+    r1 = ResNet18_2D(num_classes=11, in_channels=1)
+    out = r1(x_gray)
+    assert out.shape == (8, 11)
+    print(f"[PASS] Grayscale  {tuple(x_gray.shape)} -> {tuple(out.shape)}")
+
+    r2 = ResNet18_2D(num_classes=11, in_channels=3)
+    out = r2(x_hybrid)
+    assert out.shape == (8, 11)
+    print(f"[PASS] Hybrid     {tuple(x_hybrid.shape)} -> {tuple(out.shape)}")
+
+    r3 = ResNet18_2D(num_classes=5, in_channels=1)
+    out = r3(x_custom)
+    assert out.shape == (4, 5)
+    print(f"[PASS] Custom     {tuple(x_custom.shape)} -> {tuple(out.shape)} (5 cls)")
+
+    t, tr = count_params(r1)
+    print(f"[INFO] Params: {t:,} total, {tr:,} trainable")
+
+    # ── STFT-RADN Tests ───────────────────────────────────────
+    print("\n" + "=" * 58)
+    print("   STFT-RADN SMOKE TEST")
+    print("=" * 58)
+
+    s1 = STFTRADN(num_classes=11, in_channels=1)
+    out = s1(x_gray)
+    assert out.shape == (8, 11)
+    print(f"[PASS] Grayscale  {tuple(x_gray.shape)} -> {tuple(out.shape)}")
+
+    s2 = STFTRADN(num_classes=11, in_channels=3)
+    out = s2(x_hybrid)
+    assert out.shape == (8, 11)
+    print(f"[PASS] Hybrid     {tuple(x_hybrid.shape)} -> {tuple(out.shape)}")
+
+    s3 = STFTRADN(num_classes=5, in_channels=1)
+    out = s3(x_custom)
+    assert out.shape == (4, 5)
+    print(f"[PASS] Custom     {tuple(x_custom.shape)} -> {tuple(out.shape)} (5 cls)")
+
+    t, tr = count_params(s1)
+    print(f"[INFO] Params: {t:,} total, {tr:,} trainable")
 
     print("\n" + "=" * 58)
-    print("   [SUCCESS] ResNet-18 2D architecture verified!")
+    print("   [SUCCESS] Both architectures verified!")
     print("=" * 58)
