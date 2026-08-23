@@ -1,0 +1,45 @@
+# .github/workflows/2d_model_ci.yml
+# =========================================================================
+# CI Pipeline: 2D Model Tensor Shape Validation
+# Runs on every push to feature/2d-models to catch tensor shape mismatches
+# before they propagate into model training code.
+# =========================================================================
+
+name: 2D Model CI Pipeline
+
+on:
+  push:
+    branches: [feature/2d-models]
+  pull_request:
+    branches: [main, feature/2d-models]
+
+jobs:
+  validate-2d-shapes:
+    name: 2D Tensor Shape Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-2d-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-2d-
+
+      - name: Install dependencies (CPU-only PyTorch for CI speed)
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install numpy scipy scikit-learn matplotlib
+
+      - name: Run 2D shape validation tests
+        run: python test_2d_shapes.py
