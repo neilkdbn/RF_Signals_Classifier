@@ -29,8 +29,8 @@ DATA_DIR    = "./data"
 INPUT_FILE  = os.path.join(DATA_DIR, "X_all.npy")
 OUTPUT_FILE = os.path.join(DATA_DIR, "spectrograms_all.npy")
 
-STFT_PARAMS = dict(window=("kaiser", 0.85), nperseg=64, noverlap=32)
-EXPECTED_H, EXPECTED_W = 64, 5
+STFT_PARAMS = dict(window=("kaiser", 0.85), nperseg=32, noverlap=28)
+EXPECTED_H, EXPECTED_W = 32, 25
 BATCH_REPORT = 10_000          # print progress every N samples
 
 

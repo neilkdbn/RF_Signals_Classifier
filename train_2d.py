@@ -324,8 +324,8 @@ if __name__ == "__main__":
         help="AdamW learning rate (default: 1e-3)",
     )
     parser.add_argument(
-        "--weight-decay", type=float, default=1e-4,
-        help="AdamW weight decay (default: 1e-4)",
+        "--weight-decay", type=float, default=1e-3,
+        help="AdamW weight decay (default: 1e-3)",
     )
     parser.add_argument(
         "--patience", type=int, default=10,
