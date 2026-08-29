@@ -213,11 +213,7 @@ class SpectrogramDataset(Dataset):
         self._indices = np.load(os.path.join(data_dir, idx_map[split]))
         
         self.split_name = split
-        if self.split_name == "train":
-            import torchvision.transforms as T
-            self.transform = T.RandomErasing(p=0.5, scale=(0.02, 0.33), ratio=(0.3, 3.3), value=0)
-        else:
-            self.transform = None
+        self.transform = None
 
     def __len__(self) -> int:
         return len(self._indices)
