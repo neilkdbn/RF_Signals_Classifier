@@ -25,6 +25,7 @@ class BasicBlock(nn.Module):
             in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False
         )
         self.bn1 = nn.BatchNorm2d(planes)
+        self.dropout = nn.Dropout2d(p=0.3)
         self.conv2 = nn.Conv2d(
             planes, planes, kernel_size=3, stride=1, padding=1, bias=False
         )
@@ -43,6 +44,7 @@ class BasicBlock(nn.Module):
 
     def forward(self, x):
         out = F.relu(self.bn1(self.conv1(x)))
+        out = self.dropout(out)
         out = self.bn2(self.conv2(out))
         out += self.shortcut(x)
         out = F.relu(out)
@@ -74,23 +76,23 @@ class ResNet18_2D(nn.Module):
 
     def __init__(self, num_classes=11, in_channels=1):
         super().__init__()
-        self.in_planes = 64
+        self.in_planes = 16
 
         # ── Stem (no MaxPool) ──────────────────────────────────
         self.conv1 = nn.Conv2d(
-            in_channels, 64, kernel_size=3, stride=1, padding=1, bias=False
+            in_channels, 16, kernel_size=3, stride=1, padding=1, bias=False
         )
-        self.bn1 = nn.BatchNorm2d(64)
+        self.bn1 = nn.BatchNorm2d(16)
 
         # ── Residual Layers [2, 2, 2, 2] ──────────────────────
-        self.layer1 = self._make_layer(64,  num_blocks=2, stride=1)
-        self.layer2 = self._make_layer(128, num_blocks=2, stride=2)
-        self.layer3 = self._make_layer(256, num_blocks=2, stride=2)
-        self.layer4 = self._make_layer(512, num_blocks=2, stride=2)
+        self.layer1 = self._make_layer(16,  num_blocks=2, stride=1)
+        self.layer2 = self._make_layer(32, num_blocks=2, stride=2)
+        self.layer3 = self._make_layer(64, num_blocks=2, stride=2)
+        self.layer4 = self._make_layer(128, num_blocks=2, stride=2)
 
         # ── Classification Head ────────────────────────────────
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = nn.Linear(512 * BasicBlock.expansion, num_classes)
+        self.fc = nn.Linear(128 * BasicBlock.expansion, num_classes)
 
         # ── Weight Initialization (Kaiming) ────────────────────
         self._init_weights()
@@ -122,12 +124,12 @@ class ResNet18_2D(nn.Module):
         Forward pass through the modified ResNet-18.
 
         Feature map sizes for input [B, 1, 64, 5]:
-            conv1  → [B, 64,  64, 5]
-            layer1 → [B, 64,  64, 5]
-            layer2 → [B, 128, 32, 3]
-            layer3 → [B, 256, 16, 2]
-            layer4 → [B, 512,  8, 1]
-            avgpool→ [B, 512,  1, 1]
+            conv1  → [B, 16,  64, 5]
+            layer1 → [B, 16,  64, 5]
+            layer2 → [B, 32, 32, 3]
+            layer3 → [B, 64, 16, 2]
+            layer4 → [B, 128,  8, 1]
+            avgpool→ [B, 128,  1, 1]
             fc     → [B, num_classes]
         """
         # Stem

@@ -1,71 +1,32 @@
 # train_2d.py
 # =========================================================================
-# CHUNK 4: 2D Training Loop
+# CHUNK 4: 2D Training Loop  [OPTIMISED — pre-computed STFT pipeline]
 # Comprehensive training orchestrator for ResNet-18 and STFT-RADN.
 # AdamW optimizer, CrossEntropy loss, ReduceLROnPlateau scheduler,
 # early stopping on validation loss, and per-SNR accuracy logging
 # to match Team A's benchmarking format.
+#
+# Data pipeline:
+#   python precompute_stft.py   ← run ONCE to build spectrograms_all.npy
+#   python train_2d.py          ← fast training via mmap + num_workers
 # =========================================================================
 
 import os
 import sys
 import time
-import warnings
 import argparse
 import numpy as np
 import torch
 import torch.nn as nn
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from scipy.signal import stft as scipy_stft
 
-from dataset_loader import get_rf_dataloader
+from dataset_loader import get_spectrogram_dataloader
 from models_2d import ResNet18_2D, STFTRADN
 
-# Suppress scipy's harmless "complex input" warning during STFT
-warnings.filterwarnings("ignore", message=".*complex.*return_onesided.*")
 
-
-# ──────────────────────────────────────────────────────────────
-# Transform: 1D IQ -> 2D Spectrogram (on-the-fly)
-# ──────────────────────────────────────────────────────────────
-
-class IQToSpectrogram:
-    """
-    On-the-fly transform bridging Person 1's DataLoader and Person 4's models.
-    Converts a (2, 128) IQ tensor to a 2D spectrogram tensor using
-    Person 3's exact Kaiser-windowed STFT parameters.
-
-    Args:
-        mode: "grayscale" -> (1, 64, 5) single power spectrogram
-              "hybrid"    -> (3, 64, 5) [power_dB, phase, magnitude]
-    """
-    STFT_PARAMS = dict(window=("kaiser", 0.85), nperseg=64, noverlap=32)
-
-    def __init__(self, mode="grayscale"):
-        self.mode = mode
-
-    def __call__(self, signal_tensor):
-        signal_np = signal_tensor.numpy()
-        I, Q = signal_np[0], signal_np[1]
-        complex_signal = I + 1j * Q
-
-        _, _, Zxx = scipy_stft(complex_signal, **self.STFT_PARAMS)
-
-        if self.mode == "grayscale":
-            power_db = 10 * np.log10(np.abs(Zxx) ** 2 + 1e-10)
-            spec = np.fft.fftshift(power_db, axes=0)
-            return torch.tensor(spec, dtype=torch.float32).unsqueeze(0)  # (1, H, W)
-
-        else:  # hybrid
-            Zxx_s = np.fft.fftshift(Zxx, axes=0)
-            power_db = 10 * np.log10(np.abs(Zxx_s) ** 2 + 1e-10)
-            phase = np.angle(Zxx_s)
-            magnitude = np.abs(Zxx_s)
-            return torch.tensor(
-                np.stack([power_db, phase, magnitude], axis=0),
-                dtype=torch.float32,
-            )  # (3, H, W)
+# IQToSpectrogram removed — STFT is now pre-computed once by precompute_stft.py
+# and loaded via memory-mapped SpectrogramDataset for zero per-epoch overhead.
 
 
 # ──────────────────────────────────────────────────────────────
@@ -185,36 +146,33 @@ class EarlyStopping:
 def main(args):
     # ── Device ─────────────────────────────────────────────────
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    print("=" * 70)
-    print("   2D MODEL TRAINING LOOP")
-    print("=" * 70)
-    print(f"  Device     : {device}")
-    print(f"  Model      : {args.model}")
-    print(f"  Input mode : {args.input_mode}")
-    print(f"  LR         : {args.lr}  |  Weight decay: {args.weight_decay}")
-    print(f"  Batch size : {args.batch_size}  |  Max epochs: {args.epochs}")
-    print(f"  Patience   : {args.patience}")
-    print("=" * 70)
-
-    # ── Transform ──────────────────────────────────────────────
-    transform = IQToSpectrogram(mode=args.input_mode)
     in_channels = 1 if args.input_mode == "grayscale" else 3
+    num_workers = args.num_workers if args.num_workers >= 0 \
+        else min(4, os.cpu_count() or 1)
 
-    # ── DataLoaders ────────────────────────────────────────────
-    print("\n--- Loading dataset splits ---")
-    train_loader = get_rf_dataloader(
-        data_dir=args.data_dir, split="train",
-        batch_size=args.batch_size, transform=transform,
+    print("=" * 70)
+    print("   2D MODEL TRAINING LOOP  [pre-computed STFT pipeline]")
+    print("=" * 70)
+    print(f"  Device      : {device}")
+    print(f"  Model       : {args.model}")
+    print(f"  Input mode  : {args.input_mode}  ({in_channels}ch)")
+    print(f"  LR          : {args.lr}  |  Weight decay: {args.weight_decay}")
+    print(f"  Batch size  : {args.batch_size}  |  Max epochs: {args.epochs}")
+    print(f"  Patience    : {args.patience}")
+    print(f"  num_workers : {num_workers}  |  pin_memory: {torch.cuda.is_available()}")
+    print("=" * 70)
+
+    # ── DataLoaders (backed by mmap spectrograms_all.npy) ──────
+    print("\n--- Loading dataset splits (pre-computed STFT) ---")
+    loader_kwargs = dict(
+        data_dir=args.data_dir,
+        batch_size=args.batch_size,
+        in_channels=in_channels,
+        num_workers=num_workers,
     )
-    val_loader = get_rf_dataloader(
-        data_dir=args.data_dir, split="val",
-        batch_size=args.batch_size, transform=transform,
-    )
-    test_loader = get_rf_dataloader(
-        data_dir=args.data_dir, split="test",
-        batch_size=args.batch_size, transform=transform,
-    )
+    train_loader = get_spectrogram_dataloader(split="train", **loader_kwargs)
+    val_loader   = get_spectrogram_dataloader(split="val",   **loader_kwargs)
+    test_loader  = get_spectrogram_dataloader(split="test",  **loader_kwargs)
     print(f"  Train : {len(train_loader.dataset):>6} samples  ({len(train_loader)} batches)")
     print(f"  Val   : {len(val_loader.dataset):>6} samples  ({len(val_loader)} batches)")
     print(f"  Test  : {len(test_loader.dataset):>6} samples  ({len(test_loader)} batches)")
@@ -366,12 +324,17 @@ if __name__ == "__main__":
         help="AdamW learning rate (default: 1e-3)",
     )
     parser.add_argument(
-        "--weight-decay", type=float, default=1e-4,
-        help="AdamW weight decay (default: 1e-4)",
+        "--weight-decay", type=float, default=1e-2,
+        help="AdamW weight decay (default: 1e-2)",
     )
     parser.add_argument(
         "--patience", type=int, default=10,
         help="Early stopping patience in epochs (default: 10)",
+    )
+    parser.add_argument(
+        "--num-workers", type=int, default=-1,
+        help="DataLoader worker processes. -1 = auto (min(4, cpu_count)). "
+             "Set 0 to disable multiprocessing (default: -1 / auto)",
     )
 
     args = parser.parse_args()
