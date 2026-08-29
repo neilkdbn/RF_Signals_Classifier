@@ -23,10 +23,10 @@ SEQ_LEN = 128          # RadioML 2016.10a I/Q sequence length
 BATCH_SIZE = 8
 
 # Expected spectrogram dimensions from complex-input two-sided STFT:
-#   H = nperseg = 64  (frequency bins, two-sided for complex signal)
-#   W = 5             (time bins: scipy default boundary='zeros', padded=True)
-EXPECTED_H = 64
-EXPECTED_W = 5
+#   H = nperseg = 32  (frequency bins, two-sided for complex signal)
+#   W = 33             (time bins)
+EXPECTED_H = 32
+EXPECTED_W = 33
 
 
 # ──────────────────────────────────────────────────────────────

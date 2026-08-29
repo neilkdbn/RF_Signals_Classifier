@@ -316,7 +316,7 @@ class STFTRADN(nn.Module):
           -> Classification Backbone  (strided convs for spatial reduction)
           -> FC
 
-    Expected input:  [B, in_channels, 64, 5]
+    Expected input:  [B, in_channels, 32, 33]
     Output:          [B, num_classes]
 
     Args:
@@ -391,12 +391,12 @@ class STFTRADN(nn.Module):
         """
         Forward pass through STFT-RADN.
 
-        Feature map sizes for input [B, 1, 64, 5]:
-            sfe1     -> [B, 64,  64, 5]   (shallow features F0)
-            sfe2     -> [B, 64,  64, 5]   (deeper stem F1)
-            RDB x3   -> [B, 64,  64, 5]   each (local residual preserved)
-            GFF      -> [B, 64,  64, 5]   (fused from 3 x 64 = 192 ch)
-            + F0     -> [B, 64,  64, 5]   (global residual)
+        Feature map sizes for input [B, 1, 32, 33]:
+            sfe1     -> [B, 64,  32, 33]   (shallow features F0)
+            sfe2     -> [B, 64,  32, 33]   (deeper stem F1)
+            RDB x3   -> [B, 64,  32, 33]   each (local residual preserved)
+            GFF      -> [B, 64,  32, 33]   (fused from 3 x 64 = 192 ch)
+            + F0     -> [B, 64,  32, 33]   (global residual)
             backbone -> [B, 256,  1, 1]   (spatial reduction + pooling)
             fc       -> [B, num_classes]
         """
@@ -435,9 +435,9 @@ if __name__ == "__main__":
         trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
         return total, trainable
 
-    x_gray   = torch.randn(8, 1, 64, 5)
-    x_hybrid = torch.randn(8, 3, 64, 5)
-    x_custom = torch.randn(4, 1, 64, 5)
+    x_gray   = torch.randn(8, 1, 32, 33)
+    x_hybrid = torch.randn(8, 3, 32, 33)
+    x_custom = torch.randn(4, 1, 32, 33)
 
     # ── ResNet-18 Tests ────────────────────────────────────────
     print("=" * 58)
