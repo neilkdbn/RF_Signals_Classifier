@@ -34,3 +34,9 @@ subsystem2_1d/results/*
 # Keep the directory stubs in git
 !subsystem2_1d/checkpoints/.gitkeep
 !subsystem2_1d/results/.gitkeep
+
+# Explicitly track specific output files
+!subsystem2_1d/checkpoints/best_model.pt
+!subsystem2_1d/results/accuracy_vs_snr_cnn1d.json
+!subsystem2_1d/results/confusion_matrix_*.npy
+!subsystem2_1d/results/confusion_matrix_*.png
