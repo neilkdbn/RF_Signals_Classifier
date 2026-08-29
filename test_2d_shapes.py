@@ -17,8 +17,8 @@ from scipy.signal import stft as scipy_stft
 # ──────────────────────────────────────────────────────────────
 
 STFT_WINDOW = ("kaiser", 0.85)
-STFT_NPERSEG = 64
-STFT_NOVERLAP = 32
+STFT_NPERSEG = 32
+STFT_NOVERLAP = 28
 SEQ_LEN = 128          # RadioML 2016.10a I/Q sequence length
 BATCH_SIZE = 8
 

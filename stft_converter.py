@@ -30,8 +30,8 @@ def compute_stft(signal):
     frequencies, times, Zxx = stft(
         complex_signal,
         window=("kaiser", 0.85),
-        nperseg=64,
-        noverlap=32
+        nperseg=32,
+        noverlap=28
     )
 
     # Convert complex STFT to power
@@ -56,7 +56,7 @@ def convert_dataset(dataset):
                  signals of shape (2, 128)
 
     Returns:
-        spectrograms: NumPy array of shape (N, 64, 5)
+        spectrograms: NumPy array of shape (N, 32, 33)
         labels: NumPy array of shape (N,)
     """
 
