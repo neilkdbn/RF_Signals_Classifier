@@ -402,11 +402,11 @@ Upon completion of the full training run, `eval_1d.py` generates a structured co
 
   Metric                            cnn1d         cnn_transformer
   ------------------------------------------------------------------
-  Overall Test Accuracy             XX.XX%              XX.XX%
-  Peak Accuracy (best SNR level)    XX.XX%              XX.XX%
-  Peak SNR (dB)                     +18 dB              +18 dB
+  Overall Test Accuracy             47.10%              50.44%
+  Peak Accuracy (best SNR level)    74.47%              80.26%
+  Peak SNR (dB)                     +12 dB              +18 dB
   Trainable Parameters             865,803             308,619
-  Avg CPU Latency (ms/sample)      X.XXX ms            X.XXX ms
+  Avg CPU Latency (ms/sample)      ~3.00 ms            4.453 ms
   SNR Levels Evaluated             20 / 20             20 / 20
 ======================================================================
 ```

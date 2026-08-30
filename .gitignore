@@ -37,6 +37,8 @@ subsystem2_1d/results/*
 
 # Explicitly track specific output files
 !subsystem2_1d/checkpoints/best_model.pt
+!subsystem2_1d/checkpoints/best_cnn_transformer.pt
 !subsystem2_1d/results/accuracy_vs_snr_cnn1d.json
+!subsystem2_1d/results/accuracy_vs_snr_cnn_transformer.json
 !subsystem2_1d/results/confusion_matrix_*.npy
 !subsystem2_1d/results/confusion_matrix_*.png
