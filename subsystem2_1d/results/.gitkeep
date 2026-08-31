@@ -1,0 +1,4 @@
+# This directory holds locally generated plots, confusion matrices,
+# per-SNR accuracy curves, and metrics JSON files.
+# All result files are gitignored — see root .gitignore.
+# Only this .gitkeep file is tracked to preserve the directory in git.

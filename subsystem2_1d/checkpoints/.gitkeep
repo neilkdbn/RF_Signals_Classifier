@@ -1,0 +1,3 @@
+# This directory holds saved model checkpoints (.pt / .pth / .ckpt).
+# All checkpoint files are gitignored — see root .gitignore.
+# Only this .gitkeep file is tracked to preserve the directory in git.
