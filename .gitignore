@@ -26,19 +26,4 @@ data/
 Thumbs.db
 
 stft_dataset.npz
-
-# Subsystem 2 — 1D Model (Person 2)
-# Generated model weights, evaluation plots, and metric dumps
-subsystem2_1d/checkpoints/*
-subsystem2_1d/results/*
-# Keep the directory stubs in git
-!subsystem2_1d/checkpoints/.gitkeep
-!subsystem2_1d/results/.gitkeep
-
-# Explicitly track specific output files
-!subsystem2_1d/checkpoints/best_model.pt
-!subsystem2_1d/checkpoints/best_cnn_transformer.pt
-!subsystem2_1d/results/accuracy_vs_snr_cnn1d.json
-!subsystem2_1d/results/accuracy_vs_snr_cnn_transformer.json
-!subsystem2_1d/results/confusion_matrix_*.npy
-!subsystem2_1d/results/confusion_matrix_*.png
+*.onnx

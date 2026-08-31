@@ -1,5 +1,6 @@
 # dataset_loader.py
 import os
+import warnings
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -147,3 +148,128 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n[FAIL] PyTorch loader verification failed: {e}")
         print("Please ensure you run 'python dataset_agent.py' first to prepare the arrays.")
+
+
+# ==========================================
+# 2D Spectrogram Dataset (pre-computed STFT)
+# ==========================================
+
+class SpectrogramDataset(Dataset):
+    """
+    Fast 2D Dataset that loads pre-computed STFT spectrograms from
+    ./data/spectrograms_all.npy via memory-mapping.
+
+    Eliminates the on-the-fly scipy.signal.stft() bottleneck entirely.
+    The full (220000, 3, 64, 5) array is memory-mapped — only the pages
+    actually requested by the DataLoader are paged into RAM.
+
+    Args:
+        data_dir   : directory containing spectrograms_all.npy + index files.
+        split      : 'train', 'val', or 'test'.
+        in_channels: 1 → grayscale (power_db only), 3 → hybrid (all channels).
+
+    Run once before training:
+        python precompute_stft.py
+    """
+
+    SPECTROGRAM_FILE = "spectrograms_all.npy"
+
+    def __init__(self, data_dir: str = "./data", split: str = "train",
+                 in_channels: int = 1):
+        self.in_channels = in_channels
+        split = split.lower()
+
+        # ── Resolve data_dir ────────────────────────────────────────────
+        if not os.path.exists(data_dir):
+            for alt in [
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"),
+                os.path.join(".", "data"),
+                os.path.join("..", "data"),
+            ]:
+                if os.path.exists(alt):
+                    data_dir = alt
+                    break
+
+        # ── Validate pre-computed file ───────────────────────────────────
+        spec_path = os.path.join(data_dir, self.SPECTROGRAM_FILE)
+        if not os.path.exists(spec_path):
+            raise FileNotFoundError(
+                f"Pre-computed spectrogram file not found:\n  {spec_path}\n"
+                "Run first:  python precompute_stft.py"
+            )
+
+        # ── Memory-map the full spectrogram array (no RAM load) ──────────
+        # mmap_mode='r' → OS pages only the accessed rows into RAM.
+        self._spectrograms = np.load(spec_path, mmap_mode="r")  # (N, 3, H, W)
+
+        # ── Load labels & SNRs (tiny, load fully) ────────────────────────
+        self._labels = np.load(os.path.join(data_dir, "y_all.npy"))    # (N,)
+        self._snrs   = np.load(os.path.join(data_dir, "snrs_all.npy")) # (N,)
+
+        # ── Load split indices ───────────────────────────────────────────
+        idx_map = {"train": "train_idx.npy", "val": "val_idx.npy", "test": "test_idx.npy"}
+        if split not in idx_map:
+            raise ValueError(f"split must be 'train', 'val', or 'test', got '{split}'")
+        self._indices = np.load(os.path.join(data_dir, idx_map[split]))
+        
+        self.split_name = split
+        self.transform = None
+
+    def __len__(self) -> int:
+        return len(self._indices)
+
+    def __getitem__(self, idx: int):
+        real_idx = self._indices[idx]
+
+        # np.array() materialises one row from the mmap into a regular array
+        spec = np.array(self._spectrograms[real_idx], dtype=np.float32)  # (3, H, W)
+
+        if self.in_channels == 1:
+            spec = spec[:1]   # keep only power_db channel → (1, H, W)
+
+        signal_tensor = torch.from_numpy(spec)
+        if self.transform is not None:
+            signal_tensor = self.transform(signal_tensor)
+            
+        label_tensor  = torch.tensor(int(self._labels[real_idx]),  dtype=torch.long)
+        snr           = self._snrs[real_idx]
+
+        return signal_tensor, label_tensor, snr
+
+
+def get_spectrogram_dataloader(
+    data_dir: str    = "./data",
+    split: str       = "train",
+    batch_size: int  = 64,
+    in_channels: int = 1,
+    shuffle: bool    = None,
+    num_workers: int = None,
+) -> DataLoader:
+    """
+    Construct a fast DataLoader backed by SpectrogramDataset.
+
+    num_workers defaults to min(4, cpu_count) for maximum throughput.
+    persistent_workers=True avoids worker-respawn overhead between epochs.
+    pin_memory=True (when CUDA available) accelerates host→GPU transfers.
+    """
+    if shuffle is None:
+        shuffle = (split == "train")
+    if num_workers is None:
+        num_workers = min(4, os.cpu_count() or 1)
+
+    dataset = SpectrogramDataset(
+        data_dir=data_dir, split=split, in_channels=in_channels
+    )
+
+    use_pin_memory = torch.cuda.is_available()
+    use_persistent = num_workers > 0
+
+    loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers,
+        pin_memory=use_pin_memory,
+        persistent_workers=use_persistent,
+    )
+    return loader
