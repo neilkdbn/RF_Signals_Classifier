@@ -80,7 +80,12 @@ def load_model_from_checkpoint(
 
     model = build_model(model_name, num_classes=num_classes)
     ckpt  = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    model.load_state_dict(ckpt["model_state_dict"])
+    state_dict = (
+        ckpt["model_state_dict"]
+        if isinstance(ckpt, dict) and "model_state_dict" in ckpt
+        else ckpt
+    )
+    model.load_state_dict(state_dict)
     model.eval()
     return model
 

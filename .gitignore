@@ -9,7 +9,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Data files & checkpoints
+# Data files & large binary assets
 data/
 *.pkl
 *.npy
@@ -18,12 +18,26 @@ data/
 *.pt
 *.pth
 *.ckpt
+*.onnx
+stft_dataset.npz
+
+# Model output directories
+results/
+2D_results/
+dashboard_visuals/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Logs & profiling
+*.log
+logs/
+runs/
+wandb/
 
 # IDE & OS
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
-
-stft_dataset.npz
-*.onnx

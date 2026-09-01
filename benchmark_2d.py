@@ -30,23 +30,26 @@ def count_trainable_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 def export_to_onnx(model, input_shape, filename="stft_radn_model.onnx"):
-    """Exports the model weights to an ONNX file."""
-    device = next(model.parameters()).device
-    dummy_input = torch.randn(input_shape).to(device)
-    model.eval()
-    
-    torch.onnx.export(
-        model,
-        dummy_input,
-        filename,
-        export_params=True,
-        opset_version=12,
-        do_constant_folding=True,
-        input_names=['input'],
-        output_names=['output'],
-        dynamic_axes={'input': {0: 'batch_size'}, 'output': {0: 'batch_size'}}
-    )
-    print(f"[INFO] Model exported successfully to {filename}")
+    """Exports the model weights to an ONNX file if ONNX exporter is available."""
+    try:
+        device = next(model.parameters()).device
+        dummy_input = torch.randn(input_shape).to(device)
+        model.eval()
+        
+        torch.onnx.export(
+            model,
+            dummy_input,
+            filename,
+            export_params=True,
+            opset_version=12,
+            do_constant_folding=True,
+            input_names=['input'],
+            output_names=['output'],
+            dynamic_axes={'input': {0: 'batch_size'}, 'output': {0: 'batch_size'}}
+        )
+        print(f"[INFO] Model exported successfully to {filename}")
+    except (ImportError, ModuleNotFoundError, Exception) as exc:
+        print(f"[NOTE] ONNX export skipped ({exc}). Install onnx / onnxscript for ONNX serialization.")
 
 if __name__ == "__main__":
     # Standard input shape: [Batch, Channels, Height, Width]
